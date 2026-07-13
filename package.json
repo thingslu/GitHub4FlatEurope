@@ -1,0 +1,22 @@
+{
+  "name": "github4flateurope",
+  "version": "1.0.0",
+  "description": "Extract GitHub Enterprise users with ExternalIdentity, Copilot licence, and Organisation via GraphQL",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "export:csv": "tsx src/index.ts --format csv",
+    "export:json": "tsx src/index.ts --format json"
+  },
+  "dependencies": {
+    "csv-stringify": "^6.5.1",
+    "dotenv": "^16.4.7",
+    "undici": "^8.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.3"
+  }
+}
