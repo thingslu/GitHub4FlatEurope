@@ -176,7 +176,6 @@ export async function fetchEnterpriseMembers(cfg: GitHubConfig): Promise<Enterpr
       users.push({
         login: m.login,
         name: m.name ?? '',
-        email: '',
         organizations: m.organizations?.nodes.map(o => o.login) ?? [],
         copilotLicense: { assigned: false, pendingCancellation: false },
       });
@@ -195,7 +194,6 @@ const EXT_ID_QUERY = /* graphql */ `
         externalIdentities(first: 100, after: $after) {
           pageInfo { hasNextPage endCursor }
           nodes {
-            samlIdentity { nameId username givenName familyName }
             scimIdentity  { username }
             user           { login }
           }
@@ -206,7 +204,6 @@ const EXT_ID_QUERY = /* graphql */ `
 `;
 
 interface RawExtId {
-  samlIdentity?: { nameId?: string; username?: string; givenName?: string; familyName?: string };
   scimIdentity?: { username?: string };
   user?: { login: string };
 }
@@ -223,11 +220,7 @@ function mergeExternalIdentity(
   if (!current) return next;
 
   return {
-    samlNameId: preferLonger(current.samlNameId, next.samlNameId),
-    samlUsername: preferLonger(current.samlUsername, next.samlUsername),
     scimUsername: preferLonger(current.scimUsername, next.scimUsername),
-    givenName: next.givenName ?? current.givenName,
-    familyName: next.familyName ?? current.familyName,
   };
 }
 
@@ -257,7 +250,6 @@ const ENTERPRISE_EXT_ID_QUERY = /* graphql */ `
           externalIdentities(first: 100, after: $after) {
             pageInfo { hasNextPage endCursor }
             nodes {
-              samlIdentity { nameId username givenName familyName }
               scimIdentity  { username }
               user           { login }
             }
@@ -296,11 +288,7 @@ export async function fetchEnterpriseExternalIdentities(
     for (const e of page) {
       if (!e.user?.login) continue;
       const nextIdentity: ExternalIdentity = {
-        samlNameId: e.samlIdentity?.nameId,
-        samlUsername: e.samlIdentity?.username,
         scimUsername: e.scimIdentity?.username,
-        givenName: e.samlIdentity?.givenName,
-        familyName: e.samlIdentity?.familyName,
       };
       map.set(e.user.login, mergeExternalIdentity(map.get(e.user.login), nextIdentity));
     }
@@ -335,11 +323,7 @@ export async function fetchOrgExternalIdentities(
       for (const e of page) {
         if (!e.user?.login) continue;
         const nextIdentity: ExternalIdentity = {
-          samlNameId: e.samlIdentity?.nameId,
-          samlUsername: e.samlIdentity?.username,
           scimUsername: e.scimIdentity?.username,
-          givenName: e.samlIdentity?.givenName,
-          familyName: e.samlIdentity?.familyName,
         };
         map.set(e.user.login, mergeExternalIdentity(map.get(e.user.login), nextIdentity));
       }
@@ -404,6 +388,7 @@ interface RawCopilotSeat {
   assignee: { login: string; type: string };
   plan_type?: string | null;
   organization?: { login?: string };
+  assigning_team?: { slug?: string; name?: string };
   pending_cancellation_date?: string | null;
   last_activity_at?: string | null;
   last_activity_editor?: string | null;
@@ -414,11 +399,24 @@ interface CopilotSeatsPage {
   seats?: RawCopilotSeat[];
 }
 
+function normalizeAssigningTeamLabel(assigningTeam?: { slug?: string; name?: string }): string | undefined {
+  const slug = assigningTeam?.slug?.trim();
+  if (slug) {
+    return slug.startsWith('ent:') ? slug.slice('ent:'.length) : slug;
+  }
+
+  const name = assigningTeam?.name?.trim();
+  return name || undefined;
+}
+
 function mapSeatToLicense(seat: RawCopilotSeat, fallbackOrg?: string): CopilotLicense {
   const normalizedPlan =
     seat.plan_type === 'business' || seat.plan_type === 'enterprise'
       ? seat.plan_type
       : 'unknown';
+
+  const assignedOrg = seat.organization?.login ?? fallbackOrg;
+  const assigningTeam = normalizeAssigningTeamLabel(seat.assigning_team);
 
   return {
     assigned: true,
@@ -426,7 +424,8 @@ function mapSeatToLicense(seat: RawCopilotSeat, fallbackOrg?: string): CopilotLi
     lastActivityAt: seat.last_activity_at ?? undefined,
     lastActivityEditor: seat.last_activity_editor ?? undefined,
     pendingCancellation: !!seat.pending_cancellation_date,
-    assignedOrg: seat.organization?.login ?? fallbackOrg,
+    assignedOrg,
+    assigningTeam,
   };
 }
 

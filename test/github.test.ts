@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  fetchEnterpriseCopilotSeats,
   fetchEnterpriseScimUsers,
   fetchOrgScimUsers,
 } from '../src/api/github.js';
@@ -15,7 +16,6 @@ function enterpriseUser(
   return {
     login: name.toLowerCase().replaceAll(' ', '-'),
     name,
-    email: '',
     organizations: [],
     externalIdentity: { scimUsername },
     copilotLicense: { assigned: false, pendingCancellation: false },
@@ -29,11 +29,16 @@ test('parses PowerShell and Microsoft Graph Entra extract shapes', () => {
         Id: 'entra-1',
         UserPrincipalName: 'first@arcelormittal.com',
         DisplayName: 'First User',
+        extension_c77e68a23a6a4f91af48a93b63f95e0f_AMCOMPANYCODE: '100',
+        extension_c77e68a23a6a4f91af48a93b63f95e0f_AMBUCODE: '200',
+        extension_c77e68a23a6a4f91af48a93b63f95e0f_AMSEGMENTCODE: '300',
+        proxyAddresses: ['smtp:alias@arcelormittal.com', 'SMTP:first@arcelormittal.com'],
       },
       {
         id: 'entra-2',
         userPrincipalName: 'second@arcelormittal.com',
         displayName: 'Second User',
+        SMTP: 'second@arcelormittal.com',
       },
       { id: 'missing-upn', displayName: 'Skipped User' },
     ],
@@ -45,11 +50,19 @@ test('parses PowerShell and Microsoft Graph Entra extract shapes', () => {
         id: 'entra-1',
         userPrincipalName: 'first@arcelormittal.com',
         displayName: 'First User',
+        amCompanyCode: '100',
+        amBuCode: '200',
+        amSegmentCode: '300',
+        smtp: 'first@arcelormittal.com',
       },
       {
         id: 'entra-2',
         userPrincipalName: 'second@arcelormittal.com',
         displayName: 'Second User',
+        amCompanyCode: '',
+        amBuCode: '',
+        amSegmentCode: '',
+        smtp: 'second@arcelormittal.com',
       },
     ],
     skipped: 1,
@@ -70,11 +83,19 @@ test('resolves an authoritative Entra UPN through the SCIM external ID', () => {
       id: 'entra-object-id',
       userPrincipalName: 'person@arcelormittal.com',
       displayName: 'Authoritative Entra Name',
+      amCompanyCode: 'COMPANY-A',
+      amBuCode: 'BU-A',
+      amSegmentCode: 'SEG-A',
+      smtp: 'person@arcelormittal.com',
     }]
   );
 
   assert.equal(user.userPrincipalName, 'person@arcelormittal.com');
   assert.equal(user.upnMatchMethod, 'external_id');
+  assert.equal(user.amCompanyCode, 'COMPANY-A');
+  assert.equal(user.amBuCode, 'BU-A');
+  assert.equal(user.amSegmentCode, 'SEG-A');
+  assert.equal(user.smtp, 'person@arcelormittal.com');
   assert.deepEqual(result, {
     matchedByExternalId: 1,
     matchedByDisplayName: 0,
@@ -277,4 +298,52 @@ test('fetches paginated SCIM records with the dedicated token', async () => {
     'https://api.github.com/scim/v2/enterprises/flat%20europe/Users?startIndex=3&count=100',
     'https://api.github.com/scim/v2/organizations/flat%20org/Users?startIndex=1&count=100',
   ]);
+});
+
+test('maps assigning_team from enterprise Copilot seats', async () => {
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async (input) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url.includes('/enterprises/flat europe/copilot/billing/seats?per_page=100&page=1')) {
+      return new Response(JSON.stringify({
+        seats: [
+          {
+            assignee: { login: 'no-org-user', type: 'User' },
+            plan_type: 'enterprise',
+            organization: { login: 'example-org' },
+            assigning_team: { slug: 'copilot-licensed-users', name: 'Copilot Licensed Users' },
+            pending_cancellation_date: null,
+            last_activity_at: null,
+            last_activity_editor: null,
+          },
+        ],
+      }), { status: 200 });
+    }
+
+    return new Response('Unexpected URL', { status: 500 });
+  };
+
+  const cfg: GitHubConfig = {
+    apiBaseUrl: 'https://api.github.com',
+    enterpriseSlug: 'flat europe',
+    graphqlUrl: 'https://api.github.com/graphql',
+    token: 'github-token',
+    scimToken: 'scim-token',
+  };
+
+  try {
+    const seats = await fetchEnterpriseCopilotSeats(cfg);
+    assert.deepEqual(seats.get('no-org-user'), {
+      assigned: true,
+      planType: 'enterprise',
+      lastActivityAt: undefined,
+      lastActivityEditor: undefined,
+      pendingCancellation: false,
+      assignedOrg: 'example-org',
+      assigningTeam: 'copilot-licensed-users',
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

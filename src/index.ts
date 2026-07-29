@@ -251,8 +251,22 @@ async function run(): Promise<void> {
     copilotUsersEnterprise: copilotUsersByPlan.enterprise.size,
     copilotUsersUnknown: copilotUsersByPlan.unknown.size,
     withOrganization: users.filter(u => u.organizations.length > 0).length,
+    withoutOrganizationWithCopilotAssigned: users.filter(
+      u => u.organizations.length === 0 && u.copilotLicense.assigned
+    ).length,
+    withoutOrganizationWithCopilotAssigningTeam: users.filter(
+      u => u.organizations.length === 0 && u.copilotLicense.assigned && u.copilotLicense.assigningTeam
+    ).length,
     withAllCriteria: usersWithAllCriteria.length,
   };
+
+  const assigningTeamCountsForNoOrgLicensedUsers = users
+    .filter(u => u.organizations.length === 0 && u.copilotLicense.assigned && u.copilotLicense.assigningTeam)
+    .reduce((acc, user) => {
+      const key = user.copilotLicense.assigningTeam!;
+      acc.set(key, (acc.get(key) ?? 0) + 1);
+      return acc;
+    }, new Map<string, number>());
 
   console.log(`\n📊  User Statistics:`);
   console.log(`     • Total users: ${reportStats.total}`);
@@ -266,6 +280,17 @@ async function run(): Promise<void> {
   console.log(`     • Copilot unique users (Enterprise): ${reportStats.copilotUsersEnterprise}`);
   console.log(`     • Copilot unique users (Unknown): ${reportStats.copilotUsersUnknown}`);
   console.log(`     • With Organization: ${reportStats.withOrganization}`);
+  console.log(`     • Without Organization but With Copilot License: ${reportStats.withoutOrganizationWithCopilotAssigned}`);
+  console.log(`     • Without Organization but With Team-assigned Copilot License: ${reportStats.withoutOrganizationWithCopilotAssigningTeam}`);
+
+  if (assigningTeamCountsForNoOrgLicensedUsers.size > 0) {
+    console.log('     • Team assignments for users without organization:');
+    const sortedAssigningTeams = [...assigningTeamCountsForNoOrgLicensedUsers.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    for (const [team, count] of sortedAssigningTeams) {
+      console.log(`       - ${team}: ${count}`);
+    }
+  }
   console.log(`     • With ALL three criteria: ${reportStats.withAllCriteria}\n`);
 
   // 7. Write output (all users by default, or filtered if FILTER_STRICT env var is set)
@@ -282,18 +307,19 @@ async function run(): Promise<void> {
     const rows = usersToExport.map(u => ({
       login: u.login,
       name: u.name,
-      email: u.email,
       user_principal_name: u.userPrincipalName ?? '',
       upn_match_method: u.upnMatchMethod ?? '',
+      CompanyCode: u.amCompanyCode ?? '',
+      BusinessUnitCode: u.amBuCode ?? '',
+      SegmentCode: u.amSegmentCode ?? '',
+      SMTP: u.smtp ?? '',
       organizations: u.organizations.join(';'),
-      saml_name_id: u.externalIdentity?.samlNameId ?? '',
-      saml_username: u.externalIdentity?.samlUsername ?? '',
       scim_username: u.externalIdentity?.scimUsername ?? '',
-      given_name: u.externalIdentity?.givenName ?? '',
-      family_name: u.externalIdentity?.familyName ?? '',
+      external_id: u.externalIdentity?.externalId ?? '',
       copilot_assigned: u.copilotLicense.assigned,
       copilot_plan_type: u.copilotLicense.planType ?? '',
       copilot_org: u.copilotLicense.assignedOrg ?? '',
+      copilot_assigning_team: u.copilotLicense.assigningTeam ?? '',
       copilot_last_activity: u.copilotLicense.lastActivityAt ?? '',
       copilot_last_editor: u.copilotLicense.lastActivityEditor ?? '',
       copilot_pending_cancellation: u.copilotLicense.pendingCancellation,
