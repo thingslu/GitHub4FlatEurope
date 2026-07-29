@@ -6,10 +6,15 @@ import {
   fetchEnterpriseOrgs,
   fetchEnterpriseMembers,
   fetchEnterpriseExternalIdentities,
+  fetchEnterpriseScimUsers,
   fetchEnterpriseCopilotSeats,
   fetchOrgExternalIdentities,
+  fetchOrgScimUsers,
   fetchOrgCopilotSeats,
 } from './api/github.js';
+import { loadEntraUsers } from './identity/entra-extract.js';
+import { resolveUserPrincipalNames } from './identity/upn.js';
+import type { ScimUser } from './identity/upn.js';
 import type { GitHubConfig, EnterpriseUser, ProgressReporter } from './types/index.js';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -28,6 +33,7 @@ function getConfig(): GitHubConfig {
     enterpriseSlug: process.env.ENTERPRISE_SLUG!,
     graphqlUrl: process.env.GRAPHQL_URL!,
     apiBaseUrl: process.env.API_BASE_URL!,
+    scimToken: process.env.SCIM_TOKEN || process.env.GITHUB_TOKEN!,
   };
 }
 
@@ -60,6 +66,17 @@ async function run(): Promise<void> {
   console.log(`  GraphQL    : ${cfg.graphqlUrl}`);
   console.log(`  Output     : ${outputFile} (${finalFormat.toUpperCase()})\n`);
 
+  const entraUsersFile = process.env.ENTRA_USERS_FILE?.trim() || './input/entra-users.json';
+  const entraExtract = fs.existsSync(entraUsersFile) ? loadEntraUsers(entraUsersFile) : undefined;
+  if (entraExtract) {
+    console.log(`  Entra ID   : ${entraExtract.users.length} authoritative user record(s)`);
+    if (entraExtract.skipped > 0) {
+      reporter.warn(`${entraExtract.skipped} Entra extract record(s) without an ID or UPN were skipped.`);
+    }
+  } else {
+    reporter.warn(`Entra extract '${entraUsersFile}' was not found; user_principal_name will be empty.`);
+  }
+
   // 1. Fetch all organisations
   reporter.step('Fetching enterprise organisations…');
   const orgs = await fetchEnterpriseOrgs(cfg);
@@ -70,7 +87,7 @@ async function run(): Promise<void> {
   const users = await fetchEnterpriseMembers(cfg);
   console.log(`     → ${users.length} member(s) found`);
 
-  // 3 & 4. For every org: fetch external identities + Copilot seats
+  // 3-5. Fetch external identities, SCIM records, and Copilot seats.
   const extIdByLogin = new Map<string, NonNullable<EnterpriseUser['externalIdentity']>>();
   const copilotByLogin = new Map<string, EnterpriseUser['copilotLicense']>();
   const copilotSeatAssignmentByPlan = {
@@ -99,7 +116,25 @@ async function run(): Promise<void> {
     reporter.warn(`Enterprise-level external identities unavailable: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  // 4a. Prefer enterprise-level Copilot seats when available.
+  // REST SCIM externalId bridges GitHub identities to Entra object IDs.
+  const scimUsers: ScimUser[] = [];
+  let useOrgScimFallback = Boolean(entraExtract);
+  if (entraExtract) {
+    try {
+      reporter.step('Fetching enterprise SCIM records via REST…');
+      const enterpriseScimUsers = await fetchEnterpriseScimUsers(cfg);
+      scimUsers.push(...enterpriseScimUsers);
+      console.log(`     → ${enterpriseScimUsers.length} enterprise SCIM record(s)`);
+
+      if (enterpriseScimUsers.length > 0) {
+        useOrgScimFallback = false;
+      }
+    } catch (err) {
+      reporter.warn(`Enterprise SCIM REST API unavailable: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // 5a. Prefer enterprise-level Copilot seats when available.
   let useOrgCopilotFallback = true;
   try {
     reporter.step('Fetching enterprise-level Copilot seats…');
@@ -128,6 +163,17 @@ async function run(): Promise<void> {
         console.log(`     → ${extIds.size} linked identity/ies`);
       } catch (err) {
         reporter.warn(`[${org.login}] External identities skipped: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    if (useOrgScimFallback) {
+      reporter.step(`[${org.login}] Fetching SCIM records via REST…`);
+      try {
+        const orgScimUsers = await fetchOrgScimUsers(cfg, org.login);
+        scimUsers.push(...orgScimUsers);
+        console.log(`     → ${orgScimUsers.length} SCIM record(s)`);
+      } catch (err) {
+        reporter.warn(`[${org.login}] SCIM REST API unavailable: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
@@ -160,7 +206,7 @@ async function run(): Promise<void> {
     }
   }
 
-  // 5. Merge data onto each user
+  // 6. Merge data onto each user
   for (const user of users) {
     const ext = extIdByLogin.get(user.login);
     if (ext) user.externalIdentity = ext;
@@ -169,10 +215,24 @@ async function run(): Promise<void> {
     if (seat) user.copilotLicense = seat;
   }
 
+  const upnResolution = entraExtract
+    ? resolveUserPrincipalNames(users, scimUsers, entraExtract.users)
+    : undefined;
+  if (upnResolution) {
+    console.log(`     → ${upnResolution.matchedByExternalId} UPN(s) matched by Entra object ID`);
+    console.log(`     → ${upnResolution.matchedByDisplayName} UPN(s) matched by guarded display name`);
+    if (upnResolution.ambiguous > 0) {
+      reporter.warn(`${upnResolution.ambiguous} UPN match(es) were ambiguous and left empty.`);
+    }
+    if (upnResolution.unresolved > 0) {
+      reporter.warn(`${upnResolution.unresolved} UPN(s) could not be resolved from the Entra extract.`);
+    }
+  }
+
   // Do not append Copilot users missing from enterprise members; these are typically
   // users already removed from organizations but still visible in billing seats history.
 
-  // 5a. Filter users with all three criteria: ExternalIdentity + Copilot License + Organization
+  // 6a. Filter users with all three criteria: ExternalIdentity + Copilot License + Organization
   const usersWithAllCriteria = users.filter(user =>
     user.externalIdentity && // Has external identity (SAML/SCIM)
     user.copilotLicense?.assigned && // Has assigned Copilot license
@@ -181,6 +241,7 @@ async function run(): Promise<void> {
 
   const reportStats = {
     total: users.length,
+    withUserPrincipalName: users.filter(user => user.userPrincipalName).length,
     withExternalIdentity: users.filter(u => u.externalIdentity).length,
     withCopilotLicense: users.filter(u => u.copilotLicense?.assigned).length,
     copilotSeatAssignmentsBusiness: copilotSeatAssignmentByPlan.business,
@@ -195,6 +256,7 @@ async function run(): Promise<void> {
 
   console.log(`\n📊  User Statistics:`);
   console.log(`     • Total users: ${reportStats.total}`);
+  console.log(`     • With authoritative Entra UPN: ${reportStats.withUserPrincipalName}`);
   console.log(`     • With ExternalIdentity: ${reportStats.withExternalIdentity}`);
   console.log(`     • With Copilot License: ${reportStats.withCopilotLicense}`);
   console.log(`     • Copilot seat assignments (Business): ${reportStats.copilotSeatAssignmentsBusiness}`);
@@ -206,7 +268,7 @@ async function run(): Promise<void> {
   console.log(`     • With Organization: ${reportStats.withOrganization}`);
   console.log(`     • With ALL three criteria: ${reportStats.withAllCriteria}\n`);
 
-  // 6. Write output (all users by default, or filtered if FILTER_STRICT env var is set)
+  // 7. Write output (all users by default, or filtered if FILTER_STRICT env var is set)
   const shouldFilterStrict = process.env.FILTER_STRICT?.toLowerCase() === 'true';
   const usersToExport = shouldFilterStrict ? usersWithAllCriteria : users;
 
@@ -221,6 +283,8 @@ async function run(): Promise<void> {
       login: u.login,
       name: u.name,
       email: u.email,
+      user_principal_name: u.userPrincipalName ?? '',
+      upn_match_method: u.upnMatchMethod ?? '',
       organizations: u.organizations.join(';'),
       saml_name_id: u.externalIdentity?.samlNameId ?? '',
       saml_username: u.externalIdentity?.samlUsername ?? '',
