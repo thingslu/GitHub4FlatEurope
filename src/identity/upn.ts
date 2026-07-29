@@ -10,6 +10,10 @@ export interface EntraUser {
   id: string;
   userPrincipalName: string;
   displayName: string;
+  amCompanyCode?: string;
+  amBuCode?: string;
+  amSegmentCode?: string;
+  smtp?: string;
 }
 
 export interface UpnResolution {
@@ -33,6 +37,10 @@ function addToIndex<T>(index: Map<string, T[]>, key: string | null | undefined, 
 
 function assignUpn(user: EnterpriseUser, entraUser: EntraUser, method: UpnMatchMethod): void {
   user.userPrincipalName = entraUser.userPrincipalName.trim();
+  user.amCompanyCode = entraUser.amCompanyCode?.trim() || undefined;
+  user.amBuCode = entraUser.amBuCode?.trim() || undefined;
+  user.amSegmentCode = entraUser.amSegmentCode?.trim() || undefined;
+  user.smtp = entraUser.smtp?.trim() || undefined;
   user.upnMatchMethod = method;
 }
 
@@ -95,8 +103,16 @@ export function resolveUserPrincipalNames(
     }
 
     const scimUser = scimMatches[0];
-    if (scimUser?.externalId) {
-      const idMatches = entraById.get(normalize(scimUser.externalId)) ?? [];
+    const scimExternalId = scimUser?.externalId?.trim();
+    if (scimExternalId) {
+      user.externalIdentity = {
+        ...user.externalIdentity,
+        externalId: scimExternalId,
+      };
+    }
+
+    if (scimExternalId) {
+      const idMatches = entraById.get(normalize(scimExternalId)) ?? [];
       if (idMatches.length === 1) {
         assignUpn(user, idMatches[0], 'external_id');
         resolution.matchedByExternalId++;

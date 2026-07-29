@@ -11,7 +11,7 @@ The tool is built in TypeScript and uses both GitHub GraphQL and REST APIs. It s
 ## What This Project Does
 
 The exporter:
-1. Loads an Entra ID extract containing `id`, `userPrincipalName`, and `displayName`
+1. Loads an Entra ID extract containing `id`, `userPrincipalName`, `displayName`, selected extension attributes, and primary `SMTP`
 2. Fetches organizations and enterprise members from GitHub
 3. Fetches linked external identities through GitHub GraphQL
 4. Fetches SCIM records, including `externalId`, through GitHub REST
@@ -138,10 +138,11 @@ The raw GitHub value remains in `scim_username` for traceability. The authoritat
 ## Output Fields (CSV)
 
 Includes core identity and licensing fields such as:
-- `login`, `name`, `email`, `organizations`
+- `login`, `name`, `organizations`
 - `user_principal_name`, `upn_match_method`
-- `saml_name_id`, `saml_username`, `scim_username` (raw GitHub value)
-- `copilot_assigned`, `copilot_plan_type`, `copilot_org`
+- `extension_c77e68a23a6a4f91af48a93b63f95e0f_AMCOMPANYCODE`, `extension_c77e68a23a6a4f91af48a93b63f95e0f_AMBUCODE`, `extension_c77e68a23a6a4f91af48a93b63f95e0f_AMSEGMENTCODE`, `SMTP`
+- `scim_username` (raw GitHub value), `external_id`
+- `copilot_assigned`, `copilot_plan_type`, `copilot_org`, `copilot_assigning_team`
 - `copilot_last_activity`, `copilot_last_editor`, `copilot_pending_cancellation`
 
 ## Notes

@@ -21,13 +21,10 @@ export interface Organization {
 }
 
 export interface ExternalIdentity {
-  /** SAML NameID (usually the email in IdP) */
-  samlNameId?: string;
-  samlUsername?: string;
   /** Raw SCIM username projected by GitHub; it may be truncated. */
   scimUsername?: string;
-  givenName?: string;
-  familyName?: string;
+  /** SCIM externalId, typically the authoritative Entra object ID. */
+  externalId?: string;
 }
 
 export type UpnMatchMethod = 'external_id' | 'display_name';
@@ -42,14 +39,23 @@ export interface CopilotLicense {
   pendingCancellation: boolean;
   /** Organisation through which the seat is assigned */
   assignedOrg?: string;
+  /** Team through which the Copilot seat is assigned (org/team). */
+  assigningTeam?: string;
 }
 
 export interface EnterpriseUser {
   login: string;
   name: string;
-  email: string;
   /** Authoritative Entra ID userPrincipalName. */
   userPrincipalName?: string;
+  /** Entra custom attribute extension_c77e68a23a6a4f91af48a93b63f95e0f_AMCOMPANYCODE. */
+  amCompanyCode?: string;
+  /** Entra custom attribute extension_c77e68a23a6a4f91af48a93b63f95e0f_AMBUCODE. */
+  amBuCode?: string;
+  /** Entra custom attribute extension_c77e68a23a6a4f91af48a93b63f95e0f_AMSEGMENTCODE. */
+  amSegmentCode?: string;
+  /** Primary SMTP address from Entra proxyAddresses (uppercase SMTP: entry). */
+  smtp?: string;
   upnMatchMethod?: UpnMatchMethod;
   /** All organisations in the enterprise the user belongs to */
   organizations: string[];
