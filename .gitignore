@@ -6,6 +6,7 @@ dist/
 
 # Runtime output
 output/
+input/
 
 # Local environment and machine-specific config
 .env

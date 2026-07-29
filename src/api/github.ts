@@ -5,6 +5,7 @@ import type {
   ExternalIdentity,
   CopilotLicense,
 } from '../types/index.js';
+import type { ScimUser } from '../identity/upn.js';
 import { ProxyAgent, setGlobalDispatcher } from 'undici';
 
 const proxyUrl = process.env.HTTPS_PROXY ?? process.env.HTTP_PROXY;
@@ -51,6 +52,7 @@ async function restGet<T = unknown>(url: string, token: string): Promise<T> {
       Authorization: `Bearer ${token}`,
       Accept: 'application/vnd.github+json',
       'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': 'github4flateurope/1.0.0',
     },
   });
 
@@ -349,7 +351,54 @@ export async function fetchOrgExternalIdentities(
   return map;
 }
 
-// ─── 4. Copilot Seats (REST, per org) ────────────────────────────────────────
+// ─── 4. SCIM Users (REST) ───────────────────────────────────────────────────
+
+interface ScimUsersPage {
+  totalResults?: number;
+  Resources?: ScimUser[];
+}
+
+async function fetchScimUsers(cfg: GitHubConfig, usersPath: string): Promise<ScimUser[]> {
+  const users: ScimUser[] = [];
+  const count = 100;
+  let startIndex = 1;
+
+  while (true) {
+    const url = `${cfg.apiBaseUrl}${usersPath}?startIndex=${startIndex}&count=${count}`;
+    const page = await restGet<ScimUsersPage | []>(url, cfg.scimToken);
+    if (Array.isArray(page)) break;
+
+    const resources = page.Resources ?? [];
+    for (const resource of resources) {
+      if (!resource.userName?.trim()) continue;
+      users.push({
+        externalId: resource.externalId?.trim() || undefined,
+        userName: resource.userName.trim(),
+        displayName: resource.displayName?.trim() || undefined,
+      });
+    }
+
+    if (resources.length === 0) break;
+    startIndex += resources.length;
+    if (page.totalResults !== undefined && startIndex > page.totalResults) break;
+  }
+
+  return users;
+}
+
+/** Returns SCIM records for an Enterprise Managed Users enterprise. */
+export function fetchEnterpriseScimUsers(cfg: GitHubConfig): Promise<ScimUser[]> {
+  const enterprise = encodeURIComponent(cfg.enterpriseSlug);
+  return fetchScimUsers(cfg, `/scim/v2/enterprises/${enterprise}/Users`);
+}
+
+/** Returns SCIM records provisioned for an organization. */
+export function fetchOrgScimUsers(cfg: GitHubConfig, orgLogin: string): Promise<ScimUser[]> {
+  const org = encodeURIComponent(orgLogin);
+  return fetchScimUsers(cfg, `/scim/v2/organizations/${org}/Users`);
+}
+
+// ─── 5. Copilot Seats (REST, per org) ────────────────────────────────────────
 
 interface RawCopilotSeat {
   assignee: { login: string; type: string };
